@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cyberpunk Android 3D - Three.js</title>
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      background-color: #020408;
+      font-family: sans-serif;
+    }
+    canvas {
+      display: block;
+    }
+    #info {
+      position: absolute;
+      bottom: 16px;
+      width: 100%;
+      text-align: center;
+      color: #4deeea;
+      font-size: 13px;
+      letter-spacing: 1px;
+      pointer-events: none;
+      opacity: 0.75;
+    }
+  </style>
+</head>
+<body>
+  <div id="info">Geser mouse untuk memutar • Scroll untuk zoom</div>
+
+  <!-- Import Map untuk Three.js & Addons -->
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+    import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+    import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+    // 1. INISIALISASI SCENE, KAMERA & RENDERER
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x020408);
+    scene.fog = new THREE.FogExp2(0x020408, 0.08);
+
+    const camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.1, 100);
+    camera.position.set(0, 0.1, 5.2);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.1;
+    document.body.appendChild(renderer.domElement);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+    controls.minDistance = 2.5;
+    controls.maxDistance = 9;
+    controls.maxPolarAngle = Math.PI * 0.65;
+    controls.minPolarAngle = Math.PI * 0.35;
+
+    // 2. MEMBUAT TEKSTUR SIRKUIT NEON PROSEDURAL (CANVAS 2D)
+    function createCircuitTexture() {
+      const canvas = document.createElement('canvas');
+      canvas.width = 1024;
+      canvas.height = 1024;
+      const ctx = canvas.getContext('2d');
+
+      // Latar hitam (tidak bercahaya)
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(0, 0, 1024, 1024);
+
+      ctx.strokeStyle = '#00f6ff';
+      ctx.fillStyle = '#a8ffff';
+      ctx.shadowColor = '#00e1ff';
+      ctx.shadowBlur = 12;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+
+      // Fungsi helper menggambar garis simetris kiri & kanan wajah
+      function drawSymmetricPath(points, lineWidth = 3, endDot = true) {
+        ctx.lineWidth = lineWidth;
+        [-1, 1].forEach((dir) => {
+          ctx.beginPath();
+          points.forEach(([dx, y], idx) => {
+            const x = 512 + dx * dir;
+            if (idx === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+          });
+          ctx.stroke();
+
+          if (endDot) {
+            const [lastDx, lastY] = points[points.length - 1];
+            ctx.beginPath();
+            ctx.arc(512 + lastDx * dir, lastY, lineWidth * 1.4, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        });
+      }
+
+      // Garis Dahi Tengah (Huruf V)
+      drawSymmetricPath([[0, 295], [32, 255], [48, 255]], 4, false);
+
+      // Garis Alis & Pelipis
+      drawSymmetricPath([[45, 365], [115, 365], [155, 405], [160, 465]], 3.5, true);
+
+      // Garis Batang Hidung
+      drawSymmetricPath([[14, 430], [18, 465], [26, 480], [26, 515]], 2.2, true);
+      drawSymmetricPath([[20, 445], [28, 460], [28, 495]], 1.5, false);
+
+      // Garis Pipi & Tulang Rahang
+      drawSymmetricPath([[85, 480], [115, 510], [135, 510], [165, 540]], 3, true);
+      drawSymmetricPath([[65, 495], [100, 530], [105, 585], [75, 635]], 2.5, true);
+
+      // Garis Dagu & Rahang Bawah
+      drawSymmetricPath([[0, 685], [45, 680], [95, 645], [130, 580], [145, 520]], 3, false);
+
+      // Garis Leher
+      drawSymmetricPath([[42, 710], [46, 840]], 4, true);
+      drawSymmetricPath([[72, 700], [82, 850]], 2.5, false);
+      drawSymmetricPath([[12, 745], [30, 745]], 4, true);
+
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      return texture;
+    }
+
+    const circuitEmissiveMap = createCircuitTexture();
+
+    // 3. MATERIAL KULIT SINTETIS ANDROID
+    const skinMaterial = new THREE.MeshPhysicalMaterial({
+      color: 0x0b2936,
+      metalness: 0.55,
+      roughness: 0.28,
+      clearcoat: 0.4,
+      clearcoatRoughness: 0.25,
+      emissive: 0x00e5ff,
+      emissiveMap: circuitEmissiveMap,
+      emissiveIntensity: 2.2,
+    });
+
+    const androidGroup = new THREE.Group();
+    scene.add(androidGroup);
+
+    // 4. MEMBENTUK GEOMETRI KEPALA (DEFORMASI SPHERE RESOLUSI TINGGI)
+    const headGeo = new THREE.SphereGeometry(1, 96, 96);
+    const pos = headGeo.attributes.position;
+    const v = new THREE.Vector3();
+
+    for (let i = 0; i < pos.count; i++) {
+      v.fromBufferAttribute(pos, i);
+
+      // Proporsi dasar kepala manusia
+      v.x *= 0.78;
+      v.y *= 1.12;
+      v.z *= 0.88;
+
+      // Meruncingkan bagian dagu & rahang bawah
+      if (v.y < 0) {
+        const jawFactor = Math.abs(v.y);
+        v.x *= 1.0 - 0.34 * Math.pow(jawFactor, 1.35);
+        v.z *= 1.0 - 0.18 * Math.pow(jawFactor, 1.2);
+      }
+
+      // Cekungan rongga mata (eye sockets)
+      if (v.z > 0.2) {
+        const eyeDistLeft = Math.hypot((v.x + 0.31) * 1.3, (v.y - 0.14) * 2.1);
+        const eyeDistRight = Math.hypot((v.x - 0.31) * 1.3, (v.y - 0.14) * 2.1);
+        const socket = Math.exp(-Math.pow(Math.min(eyeDistLeft, eyeDistRight) * 3.2, 2));
+        v.z -= socket * 0.14;
+      }
+
+      // Tonjolan tulang pipi (cheekbones)
+      if (v.z > 0.1) {
+        const cheekDist = Math.hypot(Math.abs(v.x) - 0.44, v.y + 0.05);
+        const cheek = Math.exp(-Math.pow(cheekDist * 3.5, 2));
+        v.x += Math.sign(v.x) * cheek * 0.05;
+        v.z += cheek * 0.06;
+      }
+
+      // Batang dan ujung hidung
+      if (v.z > 0.4 && Math.abs(v.x) < 0.22 && v.y < 0.16 && v.y > -0.26) {
+        const noseX = Math.exp(-Math.pow(v.x * 11, 2));
+        const noseY = Math.exp(-Math.pow((v.y + 0.08) * 5.5, 2));
+        v.z += noseX * noseY * 0.21;
+      }
+
+      // Bibir atas & bawah
+      if (v.z > 0.4 && Math.abs(v.x) < 0.28 && v.y < -0.28 && v.y > -0.48) {
+        const lipWidth = Math.exp(-Math.pow(v.x * 6.5, 2));
+        const upperLip = Math.exp(-Math.pow((v.y + 0.34) * 28, 2));
+        const lowerLip = Math.exp(-Math.pow((v.y + 0.41) * 25, 2));
+        v.z += lipWidth * (upperLip * 0.08 + lowerLip * 0.085);
+      }
+
+      pos.setXYZ(i, v.x, v.y, v.z);
+    }
+
+    headGeo.computeVertexNormals();
+    const headMesh = new THREE.Mesh(headGeo, skinMaterial);
+    androidGroup.add(headMesh);
+
+    // 5. MEMBUAT BOLA MATA NEON CYAN BERCAHAYA
+    function createEyeTexture() {
+      const canvas = document.createElement('canvas');
+      canvas.width = 256;
+      canvas.height = 256;
+      const ctx = canvas.getContext('2d');
+
+      ctx.fillStyle = '#04121a';
+      ctx.fillRect(0, 0, 256, 256);
+
+      // Iris bercahaya
+      const grad = ctx.createRadialGradient(128, 128, 14, 128, 128, 65);
+      grad.addColorStop(0, '#ffffff');
+      grad.addColorStop(0.35, '#00f6ff');
+      grad.addColorStop(0.8, '#007799');
+      grad.addColorStop(1, '#021520');
+
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(128, 128, 65, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Pupil hitam di tengah
+      ctx.fillStyle = '#000810';
+      ctx.beginPath();
+      ctx.arc(128, 128, 18, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Kilau titik cahaya
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.arc(114, 114, 6, 0, Math.PI * 2);
+      ctx.fill();
+
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      return tex;
+    }
+
+    const eyeTexture = createEyeTexture();
+    const eyeMaterial = new THREE.MeshStandardMaterial({
+      map: eyeTexture,
+      emissive: 0x00e5ff,
+      emissiveMap: eyeTexture,
+      emissiveIntensity: 1.8,
+      roughness: 0.1,
+    });
+
+    const eyeGeo = new THREE.SphereGeometry(0.145, 32, 32);
+    [-0.29, 0.29].forEach((xPos) => {
+      const eye = new THREE.Mesh(eyeGeo, eyeMaterial);
+      eye.position.set(xPos, 0.13, 0.72);
+      eye.rotation.y = -Math.PI / 2; // Arahkan tekstur iris ke depan (+Z)
+      androidGroup.add(eye);
+    });
+
+    // 6. LEHER & PANEL SIRKUIT SAMPING (EAR / TEMPLE MODULES)
+    const neckGeo = new THREE.CylinderGeometry(0.36, 0.45, 1.1, 48);
+    const neckMesh = new THREE.Mesh(neckGeo, skinMaterial);
+    neckMesh.position.set(0, -1.25, -0.08);
+    androidGroup.add(neckMesh);
+
+    // Modul telinga / pelipis cybernetic
+    const earGeo = new THREE.BoxGeometry(0.12, 0.52, 0.28);
+    const earMat = new THREE.MeshStandardMaterial({
+      color: 0x071c26,
+      metalness: 0.8,
+      roughness: 0.2,
+    });
+    const neonStripGeo = new THREE.BoxGeometry(0.14, 0.36, 0.04);
+    const neonStripMat = new THREE.MeshBasicMaterial({ color: 0x33ffff });
+
+    [-0.76, 0.76].forEach((xPos) => {
+      const earGroup = new THREE.Group();
+      const ear = new THREE.Mesh(earGeo, earMat);
+      const strip = new THREE.Mesh(neonStripGeo, neonStripMat);
+      strip.position.z = 0.08;
+      earGroup.add(ear, strip);
+      earGroup.position.set(xPos, 0.02, -0.05);
+      androidGroup.add(earGroup);
+    });
+
+    // Garis sirkuit melayang di latar kiri & kanan (seperti di gambar)
+    const bgLineMat = new THREE.LineBasicMaterial({ color: 0x00d8ff });
+    [-1, 1].forEach((dir) => {
+      const pts = [
+        new THREE.Vector3(0.85 * dir, -0.25, -0.2),
+        new THREE.Vector3(1.15 * dir, -0.55, -0.2),
+        new THREE.Vector3(1.15 * dir, -1.0, -0.2),
+        new THREE.Vector3(1.32 * dir, -1.18, -0.2),
+        new THREE.Vector3(1.32 * dir, -1.85, -0.2),
+      ];
+      const lineGeo = new THREE.BufferGeometry().setFromPoints(pts);
+      androidGroup.add(new THREE.Line(lineGeo, bgLineMat));
+    });
+
+    // 7. PENCAHAYAAN DRAMATIS (CYAN KEY LIGHT & RED RIM LIGHT)
+    const ambientLight = new THREE.AmbientLight(0x092433, 1.5);
+    scene.add(ambientLight);
+
+    // Cahaya utama biru-cyan dari depan atas
+    const frontLight = new THREE.SpotLight(0x38e8ff, 18);
+    frontLight.position.set(0, 2.2, 4.5);
+    frontLight.angle = Math.PI / 4;
+    frontLight.penumbra = 0.8;
+    scene.add(frontLight);
+
+    // Cahaya rim merah/oranye di sisi kiri & kanan belakang seperti pada gambar
+    const leftRimLight = new THREE.PointLight(0xff2a3c, 14, 6);
+    leftRimLight.position.set(-2.2, 0.3, -0.4);
+    scene.add(leftRimLight);
+
+    const rightRimLight = new THREE.PointLight(0xff2a3c, 14, 6);
+    rightRimLight.position.set(2.2, 0.3, -0.4);
+    scene.add(rightRimLight);
+
+    // Cahaya bawah untuk mempertegas rahang
+    const bottomLight = new THREE.PointLight(0x00b7ff, 5, 5);
+    bottomLight.position.set(0, -2.2, 2.0);
+    scene.add(bottomLight);
+
+    // 8. POST-PROCESSING (EFEK GLOW NEON / BLOOM)
+    const composer = new EffectComposer(renderer);
+    composer.addPass(new RenderPass(scene, camera));
+
+    const bloomPass = new UnrealBloomPass(
+      new THREE.Vector2(window.innerWidth, window.innerHeight),
+      0.75, // strength (kekuatan pendaran neon)
+      0.45, // radius
+      0.65  // threshold
+    );
+    composer.addPass(bloomPass);
+
+    // 9. RESPONSIVE WINDOW & ANIMASI LOOP
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      composer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    const clock = new THREE.Clock();
+
+    function animate() {
+      requestAnimationFrame(animate);
+      const t = clock.getElapsedTime();
+
+      // Animasi mengambang halus & denyut cahaya sirkuit
+      androidGroup.position.y = Math.sin(t * 1.4) * 0.04;
+      androidGroup.rotation.y = Math.sin(t * 0.6) * 0.08;
+      skinMaterial.emissiveIntensity = 2.0 + Math.sin(t * 2.5) * 0.35;
+
+      controls.update();
+      composer.render();
+    }
+
+    animate();
+  </script>
+</body>
+</html>
